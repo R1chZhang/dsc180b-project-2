@@ -1,21 +1,19 @@
 #!/usr/bin/env python
 import argparse
 import gc
-import numpy as np
 import os
 import time
-import torch
-import torch_geometric.transforms as T
 # SUPPRESSING WARNINGS FOR AP
 import warnings
-from sklearn.metrics import f1_score, average_precision_score
+
+import numpy as np
+import torch
+import torch_geometric.transforms as T
+from sklearn.metrics import f1_score, average_precision_score, precision_recall_curve
 from sklearn.utils.class_weight import compute_class_weight
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch_geometric.datasets import LRGBDataset
 from torch_geometric.datasets import Planetoid
 from torch_geometric.loader import DataLoader
-# from torch_geometric.nn import GIN, GAT
-from torch_geometric.transforms import AddLaplacianEigenvectorPE
 
 from src.encoder.add_edges import add_edges
 from src.loader.main_loader import main_loader
@@ -30,6 +28,8 @@ from src.models.san import SAN
 from src.test import test
 from src.test_lite import test_lite
 from src.train import train
+
+# from torch_geometric.nn import GIN, GAT
 
 warnings.filterwarnings('ignore')
 
@@ -53,7 +53,7 @@ parser.add_argument('--dataset', default='PascalVOC-SP', type=str,
                     help='Dataset to use (from Long Range Graph Benchmarks)')
 
 # Other Choices & hyperparameters
-parser.add_argument('--epoch', default=250, type=int,
+parser.add_argument('--epoch', default=500, type=int,
                     help='number of epochs')
 # for loss
 parser.add_argument('--criterion', default='cross_entropy', type=str,
@@ -147,13 +147,16 @@ def main(args):
 
         traindata, valdata, testdata = main_loader(args)
 
+        print(traindata.data)
+        print(traindata)
+
         in_channels = traindata.num_features
         out_channels = traindata.num_classes
 
         # Dataloaders
-        train_loader = DataLoader(traindata, args['bz'], True)
-        val_loader = DataLoader(valdata, args['bz'])
-        test_loader = DataLoader(testdata, args['bz'])
+        train_loader = DataLoader(traindata, args['bz'], True, drop_last=True)
+        val_loader = DataLoader(valdata, args['bz'], drop_last=True)
+        test_loader = DataLoader(testdata, args['bz'], drop_last=True)
         print("Encoding finished")
 
         # Set pooling based on task
@@ -174,6 +177,8 @@ def main(args):
         '''Trains and tests the model type given (defaults to all models)'''
         if modeltype == 'gcn':
             model = GCN(in_channels, in_channels, 8, out_channels, pool=pool)
+        elif modeltype == 'gatedgcn':
+            model = GCN(in_channels, in_channels, 8, out_channels, pool=pool, gated=True)
         elif modeltype == 'gin':
             model = GIN(in_channels, in_channels, 8, out_channels, pool=pool)
         elif modeltype == 'gat':
@@ -228,8 +233,10 @@ def main(args):
             metric = f1_score
         elif args['metric'] == 'ap':
             metric = average_precision_score
+        elif args['metric'] == 'prcurve':
+            metric = precision_recall_curve
 
-        best_loss = 9999999
+        best_loss = None
         dir = './results/'
         resultfile = modeltype + '/' + str(time.localtime(time.time()).tm_mon) + str(time.localtime(time.time()).tm_mday) + str(time.localtime(time.time()).tm_hour) + str(
             time.localtime(time.time()).tm_min) + str(time.localtime(time.time()).tm_sec) + '/'
@@ -237,11 +244,12 @@ def main(args):
         os.makedirs(path)
         with open(path + 'train.txt', 'a') as f:
             f.write(str(args) + '\n')
+        starttime = time.time()
         for i in range(args['epoch']):
             loss, trainacc, val_loss, acc, mod = train(train_loader, val_loader, model, optimizer, criterion, device, metric)
             if scheduler:
                 scheduler.step(val_loss)
-            if val_loss < best_loss:
+            if best_loss is None or val_loss < best_loss:
                 try:
                     torch.save(mod.state_dict(), path + 'best-model-parameters.pt')
                 except:
@@ -253,7 +261,8 @@ def main(args):
                     trainacc) + ', val acc: ' + str(acc) + "\n")
 
         model.load_state_dict(torch.load(path + 'best-model-parameters.pt'))
-
+        with open(path + 'train.txt', 'a') as f:
+            f.write("Training took " + str(time.time() - starttime) + ' seconds')
         print("Test Acc: " + str(test(test_loader, metric, model, device)))
         with open(path + 'test.txt', 'a') as f:
             f.write("Test Acc: " + str(test(test_loader, metric, model, device)))

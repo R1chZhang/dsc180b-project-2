@@ -4,8 +4,6 @@ import torch.nn.functional as F
 from sklearn.metrics import f1_score, average_precision_score
 from tqdm import tqdm
 
-from src.models.san import SAN
-
 
 def train(loader, val, model, optimizer, criterion, device, metric):
     model.to(device)
@@ -25,6 +23,7 @@ def train(loader, val, model, optimizer, criterion, device, metric):
             _, pred = torch.max(F.log_softmax(out, dim=1), 1)
         elif metric == average_precision_score:
             pred = F.log_softmax(out, dim=1)
+        #_, pred = torch.max(F.log_softmax(out, dim=1), 1)
         loss.backward()
         optimizer.step()
         total_loss.append(float(loss))
@@ -39,6 +38,7 @@ def train(loader, val, model, optimizer, criterion, device, metric):
             _, pred = torch.max(F.log_softmax(pred, dim=1), 1)
         elif metric == average_precision_score:
             pred = F.log_softmax(pred, dim=1)
+        #_, pred = torch.max(F.log_softmax(pred, dim=1), 1)
         val_loss.append(float(vloss))
         scores.append(metric(data.y.cpu().tolist(), pred.cpu().tolist(), average='macro'))
     return np.mean(total_loss), np.mean(trainscores), np.mean(val_loss), np.mean(scores), model
